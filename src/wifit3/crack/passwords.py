@@ -3,6 +3,8 @@ from collections.abc import Iterable, Iterator
 from itertools import chain
 from pathlib import Path
 
+from wifit3.dot11.wpa import is_valid_psk, psk_bytes
+
 DEFAULT_PASSWORDS_PATH = Path(__file__).parent / "assets" / "default_passwords.txt"
 
 # Each SSID fans out to 3 cases x (1 + len(_SSID_SUFFIXES)) = up to 15 passwords, each one PBKDF2
@@ -11,22 +13,30 @@ _SSID_SUFFIXES = ("123", "1234", "12345678", "!")
 _MAX_SSID_PASSWORDS = 1500
 
 
-def is_valid_psk(psk: str) -> bool:
-    """8..63 bytes once UTF-8 encoded, matching how ``derive_pmk`` encodes the passphrase."""
-    return 8 <= len(psk.encode()) <= 63
+def _encode_password(psk: str) -> str:
+    """Return ``psk`` if valid UTF-8, else hashcat's ``$HEX[...]`` form for non-UTF-8 bytes."""
+    try:
+        psk.encode("utf-8")
+        return psk
+    except UnicodeEncodeError:
+        return f"$HEX[{psk_bytes(psk).hex()}]"
 
 
-def ssid_variants(ssid: str) -> list[str]:
-    bases = [ssid, ssid.lower(), ssid.upper()]
+def ssid_variants(ssid: str | bytes) -> list[str]:
+    text = ssid.decode("utf-8", errors="surrogateescape") if isinstance(ssid, (bytes, bytearray)) else ssid
+    bases = [text, text.lower(), text.upper()]
     variants = bases + [base + suffix for base in bases for suffix in _SSID_SUFFIXES]
-    return [psk for psk in dict.fromkeys(variants) if is_valid_psk(psk)]
+    return [_encode_password(psk) for psk in dict.fromkeys(variants) if is_valid_psk(psk)]
 
 
-def ssid_passwords(ssids: Iterable[str]) -> list[str]:
+def ssid_passwords(ssids: Iterable[str | bytes]) -> list[str]:
     """Every SSID as-is, then their variants; deduped, stopping at _MAX_SSID_PASSWORDS."""
-    unique = list(dict.fromkeys(ssids))
+    unique = [
+        s.decode("utf-8", errors="surrogateescape") if isinstance(s, (bytes, bytearray)) else s
+        for s in dict.fromkeys(ssids)
+    ]
     passwords: dict[str, None] = {}
-    for psk in chain((s for s in unique if is_valid_psk(s)),
+    for psk in chain((_encode_password(s) for s in unique if is_valid_psk(s)),
                      (v for s in unique for v in ssid_variants(s))):
         if len(passwords) == _MAX_SSID_PASSWORDS:
             break

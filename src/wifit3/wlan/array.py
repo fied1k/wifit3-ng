@@ -277,6 +277,22 @@ class WlanArray:
             return aps
         return [ap for ap in aps if ap.bssid not in self._evil_twin_bssids]
 
+    def guessid_bytes(self, ap: AccessPoint) -> bytes:
+        return self._sink.guessid_bytes(ap)
+
+    def guessid(self, ap: AccessPoint) -> str:
+        return self._sink.guessid(ap)
+
+    def decloak(
+        self,
+        ap: AccessPoint,
+        ssid: str,
+        method: str,
+        ssid_bytes: Optional[bytes] = None,
+        reveal_frame: Optional[bytes] = None,
+    ) -> None:
+        self._sink.decloak(ap, ssid, method, ssid_bytes=ssid_bytes, reveal_frame=reveal_frame)
+
     def remove_access_point(self, bssid: str) -> Optional[AccessPoint]:
         """Evict an AP and its dependent registry state."""
         return self._sink.remove_access_point(bssid)

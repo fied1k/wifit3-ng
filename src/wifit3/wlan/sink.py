@@ -25,9 +25,10 @@ from wifit3.dot11.parser import WlanFrameParser
 from wifit3.dot11.wsc import messages as WSC
 from wifit3.dot11.wsc.identity import apply_wsc_identity
 from wifit3.dot11.packet import (
-    Packet, BeaconPacket, EapPacket, EapolPacket, WepDataPacket, AssocRequestPacket,
-    ProbeReqPacket,
+    Packet, BeaconPacket, ProbeResponsePacket, EapPacket, EapolPacket, WepDataPacket,
+    AssocRequestPacket, AssocRespPacket, ProbeReqPacket,
 )
+from wifit3.text import displayable_ssid
 from wifit3.dot11.enterprise import eap_tls_fragment, parse_tls_records
 from wifit3.persist.hidden_ssids import HiddenSsidStore, HiddenSsidStoreError
 from wifit3.persist.wifi_profiles import WifiProfileStore, WifiProfileStoreError
@@ -68,6 +69,7 @@ class WlanSink:
 
     SIBLING_BIT_DIFF_MAX = 4
     SIGNAL_WINDOW_SIZE = 8
+    ASSOC_RESPONSE_WINDOW_S = 0.1
 
     def __init__(
         self,
@@ -103,6 +105,7 @@ class WlanSink:
         self._waiters_lock = threading.Lock()
         self._eap_tls_fragments: dict[tuple[str, str, int, int], bytearray] = {}
         self._active_enterprise_sessions: dict[tuple[str, str], EnterpriseSession] = {}
+        self._pending_assoc_requests: dict[tuple[str, str], tuple[AssocRequestPacket, float]] = {}
 
     # ----- signal (per-card) -------------------------------------------------
 
@@ -154,10 +157,17 @@ class WlanSink:
 
     # ----- ingest ------------------------------------------------------------
 
-    def update(self, pkt: Packet, card_id: str, channel_hint: int = 1) -> None:
+    def update(
+        self,
+        pkt: Packet,
+        card_id: str,
+        channel_hint: int = 1,
+        timestamp: Optional[float] = None,
+    ) -> None:
         """Fold one deduplicated (novel) frame into the picture. ``card_id`` names the receiving
         card (for per-card RSSI); ``channel_hint`` is that card's current channel, used only when a
         beacon carries no channel of its own."""
+        now = timestamp if timestamp is not None else time.time()
         frame_type = pkt.type
         bssid = pkt.bssid
 
@@ -169,17 +179,17 @@ class WlanSink:
             logger.trace("%s", _fmt_frame("RXFRAME", frame_type, pkt.source, pkt.dest, bssid))
 
         if frame_type == "probe_req" and bssid == "ff:ff:ff:ff:ff:ff":
-            self._track_client(pkt, card_id, channel_hint)
+            self._track_client(pkt, card_id, channel_hint, now)
             return
         if not bssid or bssid == "Unknown" or bssid == "ff:ff:ff:ff:ff:ff":
             return
 
         self.packet_stats.record_rx(bssid, frame_type)  # Live packet dashboard
 
-        self._on_beacon_frame(pkt, card_id, channel_hint)
+        self._on_beacon_frame(pkt, card_id, channel_hint, now)
         self._on_wepdata_frame(pkt)
-        self._track_client(pkt, card_id, channel_hint)
-        self._on_eapol_frame(pkt)
+        self._track_client(pkt, card_id, channel_hint, now)
+        self._on_eapol_frame(pkt, now)
         self._observe_threat(pkt, channel_hint)
 
     def drain_threats(self) -> list[ThreatEvent]:
@@ -228,10 +238,17 @@ class WlanSink:
 
     # ----- typed handlers ----------------------------------------------------
 
-    def _on_beacon_frame(self, pkt: Packet, card_id: str, channel_hint: int) -> bool:
+    def _on_beacon_frame(
+        self,
+        pkt: Packet,
+        card_id: str,
+        channel_hint: int,
+        timestamp: Optional[float] = None,
+    ) -> bool:
         """Build/refresh the AP from a beacon or probe response."""
         if not isinstance(pkt, BeaconPacket):
             return False
+        now = timestamp if timestamp is not None else time.time()
         frame_type = pkt.type
         bssid = pkt.bssid
         rssi = pkt.rssi
@@ -270,9 +287,19 @@ class WlanSink:
                 if self.hidden_ssids is not None and not self._is_real_ssid(ssid)
                 else None
             )
+            real_ssid = self._is_real_ssid(ssid)
+            init_ssid = ssid if real_ssid else historical_ssid
+            init_ssid_bytes = (
+                pkt.ssid_bytes if real_ssid and pkt.ssid_bytes is not None
+                else (init_ssid.encode("utf-8", errors="ignore") if init_ssid else None)
+            )
+            hidden_len = len(pkt.ssid_bytes) if (not real_ssid and pkt.ssid_bytes) else 0
             ap = AccessPoint(
                 bssid=bssid,
-                ssid=ssid if self._is_real_ssid(ssid) else historical_ssid,
+                ssid=init_ssid,
+                ssid_bytes=init_ssid_bytes,
+                ssid_displayable=displayable_ssid(init_ssid_bytes) if init_ssid_bytes else "",
+                hidden_ssid_len=hidden_len,
                 channel=channel,
                 encryption=enc,
                 akms=list(akms),
@@ -281,6 +308,8 @@ class WlanSink:
                 pairwise_ciphers=list(pkt.pairwise_ciphers),
                 group_cipher=pkt.group_cipher,
                 beacons=1 if frame_type == "beacon" else 0,
+                first_seen=now,
+                last_seen=now,
                 uptime_us=pkt.timestamp_us,
                 country_code=pkt.country_code,
                 capabilities=pkt.capabilities,
@@ -301,6 +330,9 @@ class WlanSink:
                 wps_response_type=wps_response_type,
                 wps_selected_registrar=wps_selected_registrar,
                 decloak_method="history" if historical_ssid else None,
+                decloak_reveal_frame=(
+                    pkt.raw if real_ssid and isinstance(pkt, ProbeResponsePacket) else None
+                ),
             )
             if self.enterprise_sessions is not None:
                 persisted = self.enterprise_sessions.profile_for(bssid)
@@ -342,7 +374,10 @@ class WlanSink:
                 ap.beacons += 1
 
             if self._is_real_ssid(ssid):
-                self._decloak(ap, ssid, frame_type)
+                reveal_frame = pkt.raw if isinstance(pkt, ProbeResponsePacket) else None
+                self.decloak(ap, ssid, frame_type, pkt.ssid_bytes, reveal_frame)
+            elif pkt.ssid_bytes:
+                ap.hidden_ssid_len = len(pkt.ssid_bytes)
 
             self._record_ap_signal(ap, card_id, rssi)
 
@@ -407,7 +442,7 @@ class WlanSink:
                         ap.identity.set(IdSource.WSC_BEACON, key, value)
 
         ap = self.access_points[bssid]
-        ap.last_seen = time.time()
+        ap.last_seen = now
         ap.uptime_us = pkt.timestamp_us
         ap.capabilities.merge(pkt.capabilities)
         if pkt.country_code is not None:
@@ -468,12 +503,18 @@ class WlanSink:
                 ap.wep = stats
         return True
 
-    def _track_client(self, pkt: Packet, card_id: str, channel_hint: int) -> bool:
+    def _track_client(
+        self,
+        pkt: Packet,
+        card_id: str,
+        channel_hint: int,
+        timestamp: Optional[float] = None,
+    ) -> bool:
         """Register/refresh the client STA behind a frame (assoc, probed SSIDs, decloak)."""
         frame_type = pkt.type
         if frame_type not in (
             "probe_req", "assoc_req", "reassoc_req", "data", "null_data", "wep_data", "eapol",
-            "deauth", "disassoc", "assoc_resp",
+            "deauth", "disassoc", "assoc_resp", "reassoc_resp",
         ):
             return False
         bssid = pkt.bssid
@@ -498,7 +539,7 @@ class WlanSink:
         client = self.clients[client_mac]
         self._record_client_signal(client, card_id, rssi)
         client.packets += 1
-        now = time.time()
+        now = timestamp if timestamp is not None else time.time()
         client.last_seen = now
         if isinstance(pkt, (AssocRequestPacket, ProbeReqPacket)):
             client.capabilities.merge(pkt.capabilities)
@@ -550,10 +591,21 @@ class WlanSink:
                 except HiddenSsidStoreError:
                     logger.warning("Could not persist client probe", exc_info=True)
 
-        if frame_type in ("assoc_req", "reassoc_req"):
+        if isinstance(pkt, AssocRequestPacket) and self._is_real_ssid(pkt.ssid):
+            self._pending_assoc_requests[(bssid, client_mac)] = (pkt, now)
+        elif isinstance(pkt, AssocRespPacket):
+            pending = self._pending_assoc_requests.pop((bssid, client_mac), None)
             ap = self.access_points.get(bssid)
-            if ap is not None and self._is_real_ssid(pkt.ssid):
-                self._decloak(ap, pkt.ssid, frame_type)
+            if pending is not None and ap is not None and pkt.status == 0:
+                request_pkt, request_time = pending
+                if now - request_time <= self.ASSOC_RESPONSE_WINDOW_S:
+                    self.decloak(
+                        ap,
+                        request_pkt.ssid,
+                        request_pkt.type,
+                        request_pkt.ssid_bytes,
+                        request_pkt.raw,
+                    )
         if self.ap_history is not None:
             try:
                 self.ap_history.remember_client_fingerprint(client)
@@ -564,10 +616,11 @@ class WlanSink:
                 )
         return True
 
-    def _on_eapol_frame(self, pkt: Packet) -> bool:
+    def _on_eapol_frame(self, pkt: Packet, timestamp: Optional[float] = None) -> bool:
         """Track the 4-way handshake / PMKID for a client on a known AP."""
         if not isinstance(pkt, EapolPacket):
             return False
+        now = timestamp if timestamp is not None else time.time()
         bssid = pkt.bssid
         ap = self.access_points.get(bssid)
         if ap is None:
@@ -606,20 +659,7 @@ class WlanSink:
 
         # Forged MACs keep a Handshake (for PMKID) but skip the EAPOL list.
         if not self.is_our_station(client_mac) and not hs.has_message(raw_frame):
-            eapol = HandshakeMessage(
-                raw=raw_frame,
-                msg_num=pkt.msg_num,
-                replay_hex=replay.hex(),
-                nonce=pkt.nonce or b"",
-                mic=pkt.mic or b"",
-                key_data_len=pkt.key_data_len,
-                eapol_payload=pkt.payload,
-                akm=akm,
-                mdid=pkt.mdid,
-                r0khid=pkt.r0khid,
-                r1khid=pkt.r1khid,
-                timestamp=time.time(),
-            )
+            eapol = HandshakeMessage.from_packet(pkt, akm, now)
             hs.add_message(eapol)
             msg_label = f"M{eapol.msg_num}" if eapol.msg_num else "EAPOL-?"
             logger.info(f"[{msg_label}] {bssid} <-> {client_mac} (replay {eapol.replay_hex})")
@@ -765,17 +805,57 @@ class WlanSink:
             self.ap_history.remember(ap, force=True)
         return True
 
-    def _decloak(self, ap: AccessPoint, ssid: str, method: str) -> None:
-        """Learn a hidden AP's real SSID, tag how it was revealed."""
+    def decloak(
+        self,
+        ap: AccessPoint,
+        ssid: Optional[str],
+        method: str,
+        ssid_bytes: Optional[bytes] = None,
+        reveal_frame: Optional[bytes] = None,
+    ) -> None:
+        """Learn a hidden AP's real SSID, tag how it was revealed, and update ssid_bytes/ssid_displayable."""
+        if not self._is_real_ssid(ssid):
+            return
         was_hidden = not self._is_real_ssid(ap.ssid) or ap.decloak_method == "history"
         if was_hidden:
             ap.decloak_method = method
         ap.ssid = ssid
+        raw_bytes = ssid_bytes if ssid_bytes is not None else ssid.encode("utf-8", errors="ignore")
+        if raw_bytes != ap.ssid_bytes:
+            ap.ssid_bytes = raw_bytes
+            ap.ssid_displayable = displayable_ssid(raw_bytes)
+            if reveal_frame is not None:
+                ap.decloak_reveal_frame = reveal_frame
+        elif reveal_frame is not None and ap.decloak_reveal_frame is None:
+            ap.decloak_reveal_frame = reveal_frame
         if was_hidden and self.hidden_ssids is not None:
             try:
                 self.hidden_ssids.remember(ap.bssid, ssid, method)
             except HiddenSsidStoreError:
                 logger.warning("Could not persist hidden SSID", exc_info=True)
+
+    def _decloak(
+        self,
+        ap: AccessPoint,
+        ssid: str,
+        method: str,
+        ssid_bytes: Optional[bytes] = None,
+        reveal_frame: Optional[bytes] = None,
+    ) -> None:
+        self.decloak(ap, ssid, method, ssid_bytes=ssid_bytes, reveal_frame=reveal_frame)
+
+    def guessid_bytes(self, ap: AccessPoint) -> bytes:
+        """The lowest SSID among ap's named siblings; b"" when none."""
+        sibling_ssids = []
+        for bssid in ap.siblings:
+            sibling = self.access_points.get(bssid)
+            if sibling is not None and not sibling.is_hidden and sibling.ssid_bytes:
+                sibling_ssids.append(sibling.ssid_bytes)
+        return min(sibling_ssids, default=b"")
+
+    def guessid(self, ap: AccessPoint) -> str:
+        """guessid_bytes as the UI shows it."""
+        return displayable_ssid(self.guessid_bytes(ap))
 
     @staticmethod
     def _is_real_ssid(ssid: Optional[str]) -> bool:

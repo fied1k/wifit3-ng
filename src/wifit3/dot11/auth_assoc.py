@@ -114,7 +114,7 @@ def rsn_allows_ht(trailer_ies: bytes) -> bool:
     return any(suite in trailer_ies for suite in _HT_PAIRWISE)
 
 
-def assoc_req(bssid: bytes, our_mac: bytes, ssid: str, trailer_ies: bytes = b"",
+def assoc_req(bssid: bytes, our_mac: bytes, ssid: bytes | str, trailer_ies: bytes = b"",
               channel: int = 1, privacy: Optional[bool] = None,
               ht_capable: bool = True,
               capability_flags: Optional[Set[str]] = None,

@@ -225,8 +225,9 @@ def test_wlan_frame_parser_ignores_second_ssid_ie():
 
     parsed = WlanFrameParser.parse_80211_frame(frame, -50)
     assert parsed is not None
-    # Stays "<hidden>". The late tag-0 must be ignored.
-    assert parsed.ssid == "<hidden>"
+    # Stays hidden (None). The late tag-0 must be ignored.
+    assert parsed.ssid is None
+    assert parsed.ssid_bytes == b""
 
 
 def test_wlan_frame_parser_extracts_ssid():
@@ -739,23 +740,25 @@ def test_unknown_mgmt_subtype_labeled_generic():
     assert parsed.type == "mgmt_10"
 
 
-def test_beacon_with_control_char_ssid_returns_none():
-    """Passes the structural _is_valid_frame check (tag0=SSID, tag1=rates) but the
-    SSID holds control bytes → _parse_tags rejects it as corrupt → parse None."""
-    frame = _build_beacon(ssid="\x01\x02\x03")
-    assert WlanFrameParser.parse_80211_frame(frame, -50) is None
+def test_beacon_with_control_char_ssid_escapes_them():
+    parsed = WlanFrameParser.parse_80211_frame(_build_beacon(ssid="\x01\x02\x03"), -50)
+    assert parsed is not None
+    assert (parsed.ssid, parsed.ssid_bytes) == ("\\x01\\x02\\x03", b"\x01\x02\x03")
 
 
-@pytest.mark.parametrize("bad", [
-    "\x7f",
-    "\u009b",
-    "\u0085",
-    "\u202e",
-    "\t",
-    "\n",
+@pytest.mark.parametrize(("unprintable", "escaped"), [
+    ("\x7f", "\\x7f"),
+    ("\u009b", "\\xc2\\x9b"),
+    ("\u0085", "\\xc2\\x85"),
+    ("\u202e", "\\xe2\\x80\\xae"),
+    ("\t", "\\x09"),
+    ("\n", "\\x0a"),
 ])
-def test_ssid_rejected_when_any_codepoint_is_unprintable(bad):
-    assert WlanFrameParser.parse_80211_frame(_build_beacon(ssid="Net" + bad), -50) is None
+def test_ssid_escapes_each_unprintable_codepoint(unprintable, escaped):
+    parsed = WlanFrameParser.parse_80211_frame(_build_beacon(ssid="Net" + unprintable), -50)
+    assert parsed is not None
+    assert parsed.ssid == "Net" + escaped
+    assert parsed.ssid_bytes == ("Net" + unprintable).encode("utf-8")
 
 
 @pytest.mark.parametrize("good", ["Ooredoo-322961", "Café", "\u0639\u0631\u0628\u064a", "WiFi\U0001f4f6"])

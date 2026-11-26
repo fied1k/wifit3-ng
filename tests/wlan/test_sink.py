@@ -420,23 +420,29 @@ def test_persisted_client_probe_is_restored_as_history(tmp_path):
 
 
 def test_decloak_via_assoc_req():
-    """A client's assoc-req SSID IE decloaks the hidden AP it's joining."""
+    """A client's assoc-req SSID IE decloaks the hidden AP once accepted with status 0 within 100 ms."""
     s = WlanSink()
-    s.update(pkt({"type": "beacon", "bssid": BSSID, "rssi": -60, "ssid": "<hidden>"}), W0)
+    s.update(pkt({"type": "beacon", "bssid": BSSID, "rssi": -60, "ssid": "<hidden>"}), W0, timestamp=100.0)
     assert s.access_points[BSSID].ssid is None
     s.update(pkt({"type": "assoc_req", "bssid": BSSID, "source": "12:22:33:44:55:66",
-                  "dest": BSSID, "rssi": -45, "ssid": "Real_Name"}), W0)
+                  "dest": BSSID, "rssi": -45, "ssid": "Real_Name"}), W0, timestamp=100.01)
+    assert s.access_points[BSSID].ssid is None
+    s.update(pkt({"type": "assoc_resp", "bssid": BSSID, "source": BSSID,
+                  "dest": "12:22:33:44:55:66", "rssi": -45, "status": 0}), W0, timestamp=100.05)
     ap = s.access_points[BSSID]
     assert ap.ssid == "Real_Name" and ap.decloak_method == "assoc_req"
 
 
 def test_decloak_via_reassoc_req():
-    """Reassoc-req carries the SSID too (PMF doesn't protect it), so it decloaks as well."""
+    """Reassoc-req carries the SSID too (PMF doesn't protect it), so it decloaks once accepted."""
     s = WlanSink()
-    s.update(pkt({"type": "beacon", "bssid": BSSID, "rssi": -60, "ssid": "<hidden>"}), W0)
+    s.update(pkt({"type": "beacon", "bssid": BSSID, "rssi": -60, "ssid": "<hidden>"}), W0, timestamp=100.0)
     assert s.access_points[BSSID].ssid is None
     s.update(pkt({"type": "reassoc_req", "bssid": BSSID, "source": "12:22:33:44:55:66",
-                  "dest": BSSID, "rssi": -45, "ssid": "Real_Name"}), W0)
+                  "dest": BSSID, "rssi": -45, "ssid": "Real_Name"}), W0, timestamp=100.01)
+    assert s.access_points[BSSID].ssid is None
+    s.update(pkt({"type": "assoc_resp", "bssid": BSSID, "source": BSSID,
+                  "dest": "12:22:33:44:55:66", "rssi": -45, "status": 0}), W0, timestamp=100.05)
     ap = s.access_points[BSSID]
     assert ap.ssid == "Real_Name" and ap.decloak_method == "reassoc_req"
 

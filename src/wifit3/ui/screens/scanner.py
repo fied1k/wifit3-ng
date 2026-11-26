@@ -75,6 +75,7 @@ from wifit3.ui.location_format import (
 from wifit3.ui.catalog_format import catalog_class_cell, catalog_family_cell
 from wifit3.ui.signal_bar import dbm_style
 from wifit3.ui.scan_export import export_scan_snapshot
+from wifit3.ui.modals.nickname import NicknameModal
 from wifit3.ui.screens.confirm_active import ConfirmActiveActionModal, ConfirmEndScanModal
 
 from ..capture_events import (
@@ -498,6 +499,7 @@ class ScannerView(Screen):
         Binding("t", "toggle_view", "APs/Clients/Split", show=True),
         Binding("i", "toggle_infrastructure", "Infra all", show=True),
         Binding("n", "targets_editor", "Targets", show=True),
+        Binding("N", "set_nickname", "Nickname", show=True),
         Binding("a", "open_probe_ap", "Probe Honeypot", show=True),
         Binding("v", "open_vault", "Vault", show=True),
         Binding("x", "export_scan", "Export", show=True),
@@ -1745,12 +1747,14 @@ class ScannerView(Screen):
     def _ssid_cell(self, ap: AccessPoint, target: bool = False) -> Text:
         """Badges plus confirmed, historical, or sibling-guessed SSID."""
         infrastructure = self._infrastructure_members.get(ap.bssid)
+        shown_ssid = ap.ssid_displayable or ap.ssid or ""
+        nickname = Config.nickname(ap.bssid)
         if ap.is_own_fake:
             state = "ACTIVE" if ap.own_fake_active else "STOPPED"
-            name = Text(f"◆ FAKE AP [{state}] · {ap.ssid}", style="bold red")
+            name = Text(f"◆ FAKE AP [{state}] · {shown_ssid}", style="bold red")
         elif infrastructure is not None:
             name = Text(
-                f"▸ {ap.ssid} · {len(infrastructure)} APs",
+                f"▸ {shown_ssid} · {len(infrastructure)} APs",
                 style="bold red" if target else "bold cyan",
             )
         elif ap.ssid:
@@ -1760,7 +1764,8 @@ class ScannerView(Screen):
                 else "bold yellow" if historical
                 else f"{self._theme_fg} bold"
             )
-            name = Text(f"{ap.ssid} [history]" if historical else ap.ssid, style=name_style)
+            label = f"{nickname} ({shown_ssid})" if nickname else shown_ssid
+            name = Text(f"{label} [history]" if historical else label, style=name_style)
             if ap.bssid in self._secondary_member_bssids:
                 name = Text("└ ", style="dim cyan") + name
             if ap.capabilities.remote_id:
@@ -1768,7 +1773,9 @@ class ScannerView(Screen):
         else:
             sib = self._best_named_sibling_ssid(ap)
             name_style = "red bold" if target else "bold yellow" if sib else f"{self._theme_fg} italic"
-            name = Text(f"{sib} [guess]" if sib else "<Hidden>", style=name_style)
+            base = f"{sib} [guess]" if sib else "<Hidden>"
+            label = f"{nickname} ({base})" if nickname else base
+            name = Text(label, style=name_style)
 
         name.truncate(self._SSID_CELL_MAX, overflow="ellipsis")
         return name
@@ -2391,6 +2398,12 @@ class ScannerView(Screen):
         from wifit3.ui.screens.catalog import open_catalog
 
         open_catalog(self)
+
+    def action_set_nickname(self) -> None:
+        ap = self._selected_ap() if self._view_mode != "clients" else None
+        if ap is None:
+            return
+        self.app.push_screen(NicknameModal(ap.ssid_displayable or ap.ssid, ap.bssid))
 
     def action_open_vault(self) -> None:
         access_point = self._selected_ap() if self._view_mode != "clients" else None

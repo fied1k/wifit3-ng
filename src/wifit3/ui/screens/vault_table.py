@@ -7,6 +7,7 @@ from textual.widget import Widget
 
 from wifit3.models import CaptureType, PersistedCapture
 from wifit3.persist.common import capture_index_key, is_ssid_scope_key
+from wifit3.persist.config import Config
 from textual.message import Message
 
 class VaultTable(Widget):
@@ -138,6 +139,9 @@ class VaultTable(Widget):
                 
                 # Build Row Markup
                 name = ssid or "‹hidden›"
+                nickname = Config.nickname(bssid) if not is_ssid_scope_key(bssid) else None
+                if nickname:
+                    name = f"{nickname} ({name})"
                 if is_ssid_scope_key(bssid):
                     bssid_suffix = " [dim]any AP[/dim]"
                 elif ssid_counts.get(ssid or "", 0) > 1:

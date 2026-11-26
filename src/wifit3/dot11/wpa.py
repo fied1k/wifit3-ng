@@ -27,9 +27,25 @@ _FT_R0_KEY_DATA_BITS = 384  # PMK-R0 (256) + PMK-R0Name-Salt (128)
 _FT_PMK_R1_BITS = 256
 
 
+def psk_bytes(psk: str) -> bytes:
+    """The passphrase's bytes: ``$HEX[...]`` (hashcat's form for non-UTF-8) decoded, else UTF-8, with
+    the lone surrogates of a ``surrogateescape`` decode back as their bytes."""
+    if psk.startswith("$HEX[") and psk.endswith("]"):
+        try:
+            return bytes.fromhex(psk[5:-1])
+        except ValueError:
+            pass
+    return psk.encode("utf-8", errors="surrogateescape")
+
+
+def is_valid_psk(psk: str) -> bool:
+    """8..63 bytes, as ``derive_pmk`` encodes the passphrase."""
+    return 8 <= len(psk_bytes(psk)) <= 63
+
+
 def derive_pmk(passphrase: str, ssid: bytes) -> bytes:
     """802.11i PSK passphrase to PMK: PBKDF2-HMAC-SHA1(passphrase, ssid, 4096, 32)."""
-    return hashlib.pbkdf2_hmac("sha1", passphrase.encode(), ssid, 4096, 32)
+    return hashlib.pbkdf2_hmac("sha1", psk_bytes(passphrase), ssid, 4096, 32)
 
 
 def prf(key: bytes, label: bytes, data: bytes, nbytes: int) -> bytes:

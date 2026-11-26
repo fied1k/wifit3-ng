@@ -246,7 +246,7 @@ def save_eap_lab_report(
     return SaveResult(path=path, was_new=True)
 
 
-def _fresh_path(captures_dir: Path, ssid: str | None, bssid: str, suffix: str) -> Path:
+def fresh_path(captures_dir: Path, ssid: str | None, bssid: str, suffix: str) -> Path:
     """Build captures_dir/<safe_ssid>_<bssid-dashed>_<epoch><suffix>, bumping to
     the smallest free epoch. Distinct content saved in the same second would
     otherwise collide. Dedupe only catches identical content, so structurally
@@ -258,6 +258,9 @@ def _fresh_path(captures_dir: Path, ssid: str | None, bssid: str, suffix: str) -
         if not candidate.exists():
             return candidate
         epoch += 1
+
+
+_fresh_path = fresh_path
 
 
 def _existing(captures_dir: Path, bssid: str, suffix: str) -> list[Path]:
@@ -310,6 +313,8 @@ def _pcap_records_for(ap: AccessPoint, client_mac: str) -> list[tuple[bytes, flo
     if hs.beacon_frame:
         beacon_ts = min((ts for _, ts in eapol if ts > 0), default=ap.last_seen)
         records.append((hs.beacon_frame, beacon_ts))
+        if ap.decloak_reveal_frame is not None:
+            records.append((ap.decloak_reveal_frame, beacon_ts))
     records.extend(eapol)
     return records
 
@@ -467,14 +472,19 @@ class HcFiles:
         return 0, 0
 
 
-def save_handshake(ap: AccessPoint, client_mac: str) -> Optional[SaveResult]:
+def save_handshake(
+    ap: AccessPoint,
+    client_mac: str,
+    *,
+    write_pcap_file: bool = True,
+) -> Optional[SaveResult]:
     """Save (unless deduped) 4-way handshake for ap.handshakes[client_mac]"""
     if not ap.ssid:
         return None
     hs = ap.handshakes.get(client_mac)
     if hs is None:
         return None
-    lines = eapol_hashlines(ap.ssid, hs)
+    lines = eapol_hashlines(ap.ssid_bytes or ap.ssid, hs)
     if not lines:
         return None
 
@@ -503,7 +513,7 @@ def save_handshake(ap: AccessPoint, client_mac: str) -> Optional[SaveResult]:
 
     target_path = hc.write_handshake(lines)
 
-    if Config.save_pcap:
+    if write_pcap_file and Config.save_pcap:
         pcap_path = _fresh_path(hc.captures_dir, ap.ssid, ap.bssid, "_handshake.pcap")
         write_pcap(pcap_path, _pcap_records_for(ap, client_mac))
 
@@ -517,7 +527,7 @@ def save_pmkid(ap: AccessPoint, client_mac: str) -> Optional[SaveResult]:
     hs = ap.handshakes.get(client_mac)
     if hs is None:
         return None
-    line = pmkid_hashline(ap.ssid, hs)
+    line = pmkid_hashline(ap.ssid_bytes or ap.ssid, hs)
     if not line:
         return None
     entry = parse_hc22000(line)

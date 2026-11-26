@@ -56,6 +56,12 @@ class PersistedCapture:
 class AccessPoint:
     bssid: str
     ssid: Optional[str] = None
+    # The SSID element as sent: hashlines and transmitted frames use these, not ssid.
+    ssid_bytes: Optional[bytes] = None
+    # The SSID as the UI shows it (UTF-8, else GBK/cp1252, non-printables escaped).
+    ssid_displayable: str = ""
+    # Length of a zero-filled hidden SSID element when observed (0 = empty or unknown).
+    hidden_ssid_len: int = 0
     channel: int = 1
     encryption: Optional[str] = "Unknown"
     is_own_fake: bool = False
@@ -106,6 +112,8 @@ class AccessPoint:
     # How this AP's SSID was learned, if it was ever hidden.
     # None = we never saw it hidden, or it's still hidden.
     decloak_method: Optional[str] = None
+    # Raw 802.11 frame (Probe Response or Assoc Request) that revealed a hidden AP's SSID.
+    decloak_reveal_frame: Optional[bytes] = None
 
     # BSSIDs we believe are virtual interfaces of the same physical radio (Main + Guest +
     # IoT on one router). Bidirectional.
@@ -139,6 +147,11 @@ class AccessPoint:
             vendor = vendor_for_mac(self.bssid)
             if vendor:
                 self.identity.set(IdSource.OUI, IdKey.MANUFACTURER, vendor)
+        if self.ssid and self.ssid != "<hidden>" and self.ssid_bytes is None:
+            self.ssid_bytes = self.ssid.encode("utf-8", errors="ignore")
+        if self.ssid_bytes and not self.ssid_displayable:
+            from wifit3.text import displayable_ssid
+            self.ssid_displayable = displayable_ssid(self.ssid_bytes)
 
     @property
     def signal(self) -> int:

@@ -122,12 +122,14 @@ def test_wpa3_and_pmf_flags_propagate_and_refresh():
 def test_decloak_via_assoc_req_and_method_not_overwritten():
     s = WlanSink()
     b = "12:22:33:44:55:66"
-    s.update(pkt({"type": "beacon", "bssid": b, "rssi": -60, "ssid": "<hidden>"}), W0)
+    s.update(pkt({"type": "beacon", "bssid": b, "rssi": -60, "ssid": "<hidden>"}), W0, timestamp=100.0)
     s.update(pkt({"type": "assoc_req", "bssid": b, "source": "aa:aa:aa:aa:aa:aa", "dest": b,
-                  "rssi": -65, "ssid": "TestSSID"}), W0)
+                  "rssi": -65, "ssid": "TestSSID"}), W0, timestamp=100.01)
+    s.update(pkt({"type": "assoc_resp", "bssid": b, "source": b, "dest": "aa:aa:aa:aa:aa:aa",
+                  "rssi": -60, "status": 0}), W0, timestamp=100.05)
     ap = s.access_points[b]
     assert ap.ssid == "TestSSID" and ap.decloak_method == "assoc_req"
-    s.update(pkt({"type": "probe_resp", "bssid": b, "rssi": -60, "ssid": "TestSSID"}), W0)
+    s.update(pkt({"type": "probe_resp", "bssid": b, "rssi": -60, "ssid": "TestSSID"}), W0, timestamp=100.1)
     assert s.access_points[b].decloak_method == "assoc_req"   # first method wins
 
 

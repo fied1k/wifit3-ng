@@ -15,6 +15,7 @@ from wifit3.ui.search_input import SearchInput, sync_search_input_has_text
 
 from wifit3.models import AccessPoint
 from wifit3.models.identity_display import scanner_identity_summary
+from wifit3.persist.config import Config
 from wifit3.id import vendor_for_mac
 from wifit3.ui.encryption_format import EncryptionType
 from wifit3.observe.product_catalog import catalog_family_select_options, matched_wifi_family_ids
@@ -90,6 +91,8 @@ class ScanFilter:
         """``ssid`` overrides ap.ssid so a hidden AP is searchable by its guessed name."""
         searchable = " ".join(filter(None, (
             ssid or ap.ssid,
+            ap.ssid_displayable,
+            Config.nickname(ap.bssid),
             vendor_for_mac(ap.bssid),
             scanner_identity_summary(ap),
             ap.identity.summary,

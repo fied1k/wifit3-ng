@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.12'",
@@ -1585,7 +1585,7 @@ dependencies = [
     { name = "bleak" },
     { name = "bluetooth-numbers" },
     { name = "certifi" },
-    { name = "libusb-package" },
+    { name = "libusb-package", marker = "platform_machine != 'armv7l'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "packaging" },
@@ -1613,7 +1613,7 @@ requires-dist = [
     { name = "bleak", specifier = ">=1.1.1" },
     { name = "bluetooth-numbers", specifier = ">=1.1.2" },
     { name = "certifi", specifier = ">=2024" },
-    { name = "libusb-package", specifier = ">=1.0.26.3" },
+    { name = "libusb-package", marker = "platform_machine != 'armv7l'", specifier = ">=1.0.26.3" },
     { name = "numpy", specifier = ">=2" },
     { name = "packaging", specifier = ">=24" },
     { name = "platformdirs" },

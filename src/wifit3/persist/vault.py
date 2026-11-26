@@ -25,6 +25,7 @@ from wifit3.persist.common import (
     ssid_scope_key,
 )
 from wifit3.persist.config import Config
+from wifit3.persist.pcap import FourWayHandshake, HandshakePcaps, read_handshakes
 from wifit3.persist.private_files import ensure_private_directory, harden_private_file
 from wifit3.persist.save import SaveResult
 from wifit3.vault.manager import JobManager
@@ -78,6 +79,7 @@ class Vault:
     def __init__(self) -> None:
         self._index: Dict[str, List[PersistedCapture]] = {}
         self._probed_ssids_source: Callable[[], Iterable[str]] = lambda: ()
+        self._handshake_pcaps = HandshakePcaps()
         self.errors: list[str] = []                       # surfaced as toasts by the app on mount
         try:
             self.refresh()
@@ -226,7 +228,9 @@ class Vault:
 
     def save_handshake(self, ap: "AccessPoint", client_mac: str) -> Optional[SaveResult]:
         before = self._hc_lines(ap)
-        result = save.save_handshake(ap, client_mac)
+        result = save.save_handshake(ap, client_mac, write_pcap_file=False)
+        if result is not None and Config.save_pcap:
+            self._handshake_pcaps.save(ap, client_mac)
         if result and result.was_new:
             capture = PersistedCapture(
                 type=CaptureType.HS, timestamp=int(time.time()), path=str(result.path),
@@ -234,6 +238,18 @@ class Vault:
             self._index.setdefault(ap.bssid, []).insert(0, capture)
             self._auto_crack(ap, capture, before)
         return result
+
+    def handshakes(self, bssid: str) -> list[FourWayHandshake]:
+        """Every 4-way handshake in this AP's saved pcaps, newest first."""
+        captures = self.persisted(bssid)
+        pcap_paths = [
+            Path(c.path) for c in captures
+            if c.type == CaptureType.HS and c.path.lower().endswith((".pcap", ".pcapng"))
+        ]
+        if not pcap_paths:
+            return []
+        ssid = next((c.ssid for c in captures if c.ssid), None)
+        return read_handshakes(bssid, ssid, pcap_paths)
 
     def save_pmkid(self, ap: "AccessPoint", client_mac: str) -> Optional[SaveResult]:
         before = self._hc_lines(ap)
@@ -263,6 +279,15 @@ class Vault:
             )
 
     def save_wep_key(self, ap: "AccessPoint", key: bytes) -> Optional[SaveResult]:
+        if key:
+            key_hex = key.hex()
+            existing = next(
+                (c for c in self.persisted(ap.bssid)
+                 if c.type == CaptureType.WEP and (c.value or "").lower() == key_hex),
+                None,
+            )
+            if existing is not None:
+                return SaveResult(path=Path(existing.path), was_new=False)
         result = save.save_wep_key(ap, key)
         if result and result.was_new:
             self._index.setdefault(ap.bssid, []).insert(
@@ -271,6 +296,14 @@ class Vault:
         return result
 
     def save_wps_pin(self, ap: "AccessPoint", pin: str, psk: str) -> Optional[SaveResult]:
+        if pin and psk:
+            existing = next(
+                (c for c in self.persisted(ap.bssid)
+                 if c.type == CaptureType.WPS_PIN and c.pin == pin and c.value == psk),
+                None,
+            )
+            if existing is not None:
+                return SaveResult(path=Path(existing.path), was_new=False)
         result = save.save_wps_pin(ap, pin, psk)
         if result and result.was_new:
             self._index.setdefault(ap.bssid, []).insert(
@@ -279,6 +312,14 @@ class Vault:
         return result
 
     def save_wps_pbc(self, ap: "AccessPoint", psk: str) -> Optional[SaveResult]:
+        if psk:
+            existing = next(
+                (c for c in self.persisted(ap.bssid)
+                 if c.type == CaptureType.WPS_PBC and c.value == psk),
+                None,
+            )
+            if existing is not None:
+                return SaveResult(path=Path(existing.path), was_new=False)
         result = save.save_wps_pbc(ap, psk)
         if result and result.was_new:
             self._index.setdefault(ap.bssid, []).insert(
@@ -287,9 +328,19 @@ class Vault:
         return result
 
     def save_wpa_psk(self, ap: "AccessPoint", psk: str) -> Optional[SaveResult]:
+        stored_bssid = ap.bssid if (ap.bssid or "").strip() else ""
+        if psk:
+            key = capture_index_key(stored_bssid, ap.ssid)
+            existing = next(
+                (c for c in self._index.get(key, [])
+                 if c.type == CaptureType.WPA_PSK and c.value == psk
+                 and (stored_bssid or c.ssid == ap.ssid)),
+                None,
+            )
+            if existing is not None:
+                return SaveResult(path=Path(existing.path), was_new=False)
         result = save.save_wpa_psk(ap, psk)
         if result and result.was_new:
-            stored_bssid = ap.bssid if (ap.bssid or "").strip() else ""
             self._index.setdefault(capture_index_key(stored_bssid, ap.ssid), []).insert(
                 0, PersistedCapture(type=CaptureType.WPA_PSK, timestamp=int(time.time()),
                                     path=str(result.path), bssid=stored_bssid, value=psk, ssid=ap.ssid))
@@ -434,10 +485,14 @@ class Vault:
                     (True, f"{len(valid)} valid Hashcat record{'s' if len(valid) != 1 else ''}")
                     if valid else (False, "No valid Hashcat 22000 records")
                 )
-            if path.suffix.lower() == ".pcap":
+            if path.suffix.lower() in {".pcap", ".pcapng"}:
                 with path.open("rb") as stream:
                     header = stream.read(4)
-                magics = {b"\xd4\xc3\xb2\xa1", b"\xa1\xb2\xc3\xd4", b"\x4d\x3c\xb2\xa1", b"\xa1\xb2\x3c\x4d"}
+                magics = {
+                    b"\xd4\xc3\xb2\xa1", b"\xa1\xb2\xc3\xd4",
+                    b"\x4d\x3c\xb2\xa1", b"\xa1\xb2\x3c\x4d",
+                    b"\x0a\x0d\x0d\x0a",
+                }
                 return (
                     (True, "Valid PCAP header")
                     if header in magics else (False, "Invalid or truncated PCAP header")

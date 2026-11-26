@@ -11,7 +11,7 @@ _CAPABILITY_INFO = 0x0411
 _OPEN_CAPABILITY_INFO = 0x0401
 
 
-def probe_req(bssid: bytes, our_mac: bytes, ssid: str, channel: int = 1) -> bytes:
+def probe_req(bssid: bytes, our_mac: bytes, ssid: bytes | str, channel: int = 1) -> bytes:
     """Directed Probe Request for ``ssid``, addressed to ``bssid`` (RA/BSSID), from our
     forged STA. The AP answers only if the SSID matches (or it responds broadly)."""
     hdr = mac_header(b"\x40\x00", bssid, our_mac, bssid)
@@ -20,7 +20,7 @@ def probe_req(bssid: bytes, our_mac: bytes, ssid: str, channel: int = 1) -> byte
 
 def probe_resp(
     bssid: bytes,
-    ssid: str,
+    ssid: bytes | str,
     channel: int,
     rsn_ie: bytes = GENERIC_RSN_IE,
     profile_ies: bytes = b"",

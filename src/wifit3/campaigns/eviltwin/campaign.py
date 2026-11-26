@@ -93,6 +93,7 @@ class EvilTwinCampaign(Campaign):
             raise ValueError("EvilTwin needs a known SSID: target is hidden.")
         super().__init__(ap=target, array=array)
         self.ssid = target.ssid
+        self.ssid_bytes = getattr(target, "ssid_bytes", None) or target.ssid.encode("utf-8", "ignore")
         self.target_channel = target.channel
         self.twin_iface = evil_input.twin_iface
         self.punt_iface = evil_input.punt_iface
@@ -116,7 +117,7 @@ class EvilTwinCampaign(Campaign):
                       str_to_mac(self.twin_bssid), self.twin_channel, self.target_channel)
 
     async def _loop(self) -> None:
-        self.fakeap = FakeAP(self.twin_iface, str_to_mac(self.twin_bssid), self.ssid,
+        self.fakeap = FakeAP(self.twin_iface, str_to_mac(self.twin_bssid), self.ssid_bytes,
                              self.twin_channel, self.twin_beacon, rx_source=self.twin_iface,
                              record_m1=self.array.record_injected_eapol)
         if self.same_bssid:

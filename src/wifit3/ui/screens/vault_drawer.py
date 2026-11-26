@@ -10,6 +10,7 @@ from textual.binding import Binding
 from .vault_table import VaultTable
 from .vault_item import VaultItemView
 from .vault_import import VaultImportModal
+from wifit3.persist.config import Config
 from wifit3.ui.vault.job_pane import JobTrackerPane
 
 if TYPE_CHECKING:
@@ -95,7 +96,10 @@ class VaultDrawer(ModalScreen):
     def _context_label(self) -> str:
         if self._access_point is None:
             return ""
-        name = self._access_point.ssid or "‹hidden SSID›"
+        name = self._access_point.ssid_displayable or self._access_point.ssid or "‹hidden SSID›"
+        nickname = Config.nickname(self._access_point.bssid)
+        if nickname:
+            name = f"{nickname} ({name})"
         return f"Selected AP: {name}  ·  {self._access_point.bssid}"
 
     def action_dismiss_drawer(self) -> None:

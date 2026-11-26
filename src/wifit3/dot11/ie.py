@@ -85,9 +85,28 @@ _RSN_CAP_MFPC = 0x0080          # RSN caps MFPC bit (bit 7)
 _BIP_CMAC_128 = b"\x00\x0f\xac\x06"
 
 
-def ssid_ie(ssid: str) -> bytes:
-    """SSID IE (tag 0): UTF-8, truncated to the 32-byte spec maximum."""
-    s = ssid.encode("utf-8", "ignore")[:32]
+def ssid_text(ssid_bytes: bytes) -> str:
+    """Decode an SSID element's bytes to text: UTF-8 ignoring bad bytes, escaping unprintable
+    characters as ``\\xNN`` (by UTF-8 byte). An all-non-UTF-8 SSID becomes ``\\xNN`` per byte
+    rather than ``""`` so it is not mistaken for hidden."""
+    if not ssid_bytes:
+        return ""
+    text = ssid_bytes.decode("utf-8", errors="ignore")
+    if not text:
+        return "".join(f"\\x{byte:02x}" for byte in ssid_bytes)
+    characters = []
+    for character in text:
+        if character.isprintable():
+            characters.append(character)
+        else:
+            characters.append("".join(f"\\x{byte:02x}" for byte in character.encode("utf-8")))
+    return "".join(characters)
+
+
+def ssid_ie(ssid: bytes | str) -> bytes:
+    """SSID IE (tag 0): raw octets (or UTF-8 when str), truncated to the 32-byte spec maximum."""
+    raw = ssid if isinstance(ssid, (bytes, bytearray)) else ssid.encode("utf-8", "ignore")
+    s = bytes(raw[:32])
     return bytes([0x00, len(s)]) + s
 
 

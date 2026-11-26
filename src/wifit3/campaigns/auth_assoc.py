@@ -105,7 +105,7 @@ class WlanTransport:
 class Association:
     """Open-System auth + Association Request against one AP."""
 
-    def __init__(self, iface, bssid: str, ssid: str, channel: int,
+    def __init__(self, iface, bssid: str, ssid: bytes | str, channel: int,
                  our_mac: Optional[bytes] = None, assoc_timeout: float = 1.5,
                  auth_timeout: float = 1.0,
                  assoc_trailer_ies: bytes = b"",

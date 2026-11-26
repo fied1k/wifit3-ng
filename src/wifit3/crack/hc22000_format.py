@@ -36,7 +36,7 @@ PMKID_SHA256_MESSAGE_PAIR_BIT = 0x02
 _PMKID_SHA256_MESSAGE_PAIR = "03"
 
 
-def pmkid_hashline(ssid: str, hs: Handshake) -> Optional[str]:
+def pmkid_hashline(ssid: bytes | str, hs: Handshake) -> Optional[str]:
     """Return a ``WPA*01*…`` (or FT-PSK ``WPA*03*…``) line for the PMKID, or None if not
     available or not crackable."""
     if not ssid or not hs.pmkid or len(hs.pmkid) != 16:
@@ -59,7 +59,7 @@ def pmkid_hashline(ssid: str, hs: Handshake) -> Optional[str]:
     return f"WPA*01{prefix}***{message_pair}"
 
 
-def eapol_hashlines(ssid: str, hs: Handshake) -> List[str]:
+def eapol_hashlines(ssid: bytes | str, hs: Handshake) -> List[str]:
     """One ``WPA*02*…`` / ``WPA*04*…`` line per distinct *crackable* handshake instance. Empty
     when the SSID is hidden or no instance is serialisable (e.g. a clipped MIC
     frame), i.e. exactly when there's nothing hashcat could crack."""
@@ -82,6 +82,24 @@ class Hc22000Line:
     mdid: str = ""      # field 9 (FT only)
     r0khid: str = ""    # field 10 (FT only)
     r1khid: str = ""    # field 11 (FT only)
+
+    @property
+    def ssid_bytes(self) -> bytes:
+        return bytes.fromhex(self.essid)
+
+    @property
+    def ssid(self) -> str:
+        from wifit3.dot11.ie import ssid_text
+        return ssid_text(self.ssid_bytes)
+
+    @property
+    def ssid_displayable(self) -> str:
+        from wifit3.text import displayable_ssid
+        return displayable_ssid(self.ssid_bytes)
+
+    @property
+    def bssid(self) -> str:
+        return ":".join(self.mac_ap[i:i + 2] for i in range(0, 12, 2))
 
 
 def _is_hex(value: str, *, exact: int | None = None, maximum: int | None = None) -> bool:

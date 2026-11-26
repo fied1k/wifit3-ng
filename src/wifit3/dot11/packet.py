@@ -32,6 +32,7 @@ class Packet:
     rssi: int
     raw: bytes
     ssid: Optional[str] = None   # on beacon/probe_resp/probe_req/assoc_req; None elsewhere
+    ssid_bytes: Optional[bytes] = None   # the SSID element as sent; set whenever tag 0 is present
 
     @property
     def transmitter(self) -> str:
@@ -95,6 +96,11 @@ class BeaconPacket(Packet):
     wsc_device_type: Optional[str] = None
     wsc_serial_number: Optional[str] = None
     rsn_ie_raw: Optional[bytes] = None
+
+
+@dataclass(slots=True, kw_only=True)
+class ProbeResponsePacket(BeaconPacket):
+    """A Probe Response (subtype 5): carries the AP's advertised capabilities and may reveal a hidden SSID."""
 
 
 @dataclass(slots=True, kw_only=True)

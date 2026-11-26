@@ -6,7 +6,7 @@ import struct
 from typing import Optional, List, Dict, Any, Tuple
 
 from wifit3.dot11.eapol import LLC_SNAP_EAPOL
-from wifit3.dot11.ie import iter_information_elements
+from wifit3.dot11.ie import iter_information_elements, ssid_text
 from wifit3.dot11.mac import mac_to_str
 from wifit3.dot11.wsc.identity import device_type_label, wps_text
 from wifit3.dot11.wsc.messages import (
@@ -30,8 +30,8 @@ from wifit3.dot11.wsc.messages import (
     ATTR_DEV_NAME as ATTR_DEVICE_NAME,
 )
 from wifit3.dot11.packet import (
-    Packet, BeaconPacket, EapPacket, EapolPacket, WepDataPacket, AssocRequestPacket,
-    AuthPacket, AssocRespPacket, DeauthPacket, ProbeReqPacket,
+    Packet, BeaconPacket, ProbeResponsePacket, EapPacket, EapolPacket, WepDataPacket,
+    AssocRequestPacket, AuthPacket, AssocRespPacket, DeauthPacket, ProbeReqPacket,
 )
 from wifit3.models.capabilities import AdvertisedCapabilities
 
@@ -47,6 +47,7 @@ class WlanFrameParser:
     SUBTYPE_ASSOC_REQ = 0x00
     SUBTYPE_ASSOC_RESP = 0x01
     SUBTYPE_REASSOC_REQ = 0x02
+    SUBTYPE_REASSOC_RESP = 0x03
     SUBTYPE_PROBE_REQ = 0x04
     SUBTYPE_PROBE_RESP = 0x05
     SUBTYPE_BEACON = 0x08
@@ -117,6 +118,7 @@ class WlanFrameParser:
             fields: Dict[str, Any] = {
                 "type": type_str,
                 "ssid": tags.get("ssid"),
+                "ssid_bytes": tags.get("ssid_bytes"),
                 "timestamp_us": struct.unpack("<Q", frame[24:32])[0],
                 "capabilities": tags["capabilities"],
                 "encryption": tags.get("encryption", "OPEN"),
@@ -147,7 +149,8 @@ class WlanFrameParser:
                         "wsc_device_type", "wsc_serial_number"):
                 if key in tags:
                     fields[key] = tags[key]
-            return BeaconPacket(**base, **fields)
+            pkt_cls = BeaconPacket if subtype == cls.SUBTYPE_BEACON else ProbeResponsePacket
+            return pkt_cls(**base, **fields)
 
         if subtype == cls.SUBTYPE_PROBE_REQ:
             tags = cls._parse_tags(frame, subtype)
@@ -155,6 +158,7 @@ class WlanFrameParser:
                 return None
             return ProbeReqPacket(
                 **base, type="probe_req", ssid=tags.get("ssid"),
+                ssid_bytes=tags.get("ssid_bytes"),
                 capabilities=tags["capabilities"],
             )
 
@@ -171,6 +175,7 @@ class WlanFrameParser:
             tags["capabilities"].listen_interval = struct.unpack("<H", frame[26:28])[0]
             return AssocRequestPacket(
                 **base, type="assoc_req", ssid=tags.get("ssid"),
+                ssid_bytes=tags.get("ssid_bytes"),
                 assoc_akm=cls._first_rsn_akm(frame, 28),
                 capabilities=tags["capabilities"])
 
@@ -187,13 +192,15 @@ class WlanFrameParser:
             tags["capabilities"].listen_interval = struct.unpack("<H", frame[26:28])[0]
             return AssocRequestPacket(
                 **base, type="reassoc_req", ssid=tags.get("ssid"),
+                ssid_bytes=tags.get("ssid_bytes"),
                 assoc_akm=cls._first_rsn_akm(frame, 34),
                 capabilities=tags["capabilities"])
 
-        if subtype == cls.SUBTYPE_ASSOC_RESP:
+        if subtype in (cls.SUBTYPE_ASSOC_RESP, cls.SUBTYPE_REASSOC_RESP):
             # Body: Capability(2) + Status(2) + AID(2); status at offset 26.
             status = struct.unpack("<H", frame[26:28])[0] if len(frame) >= 28 else None
-            return AssocRespPacket(**base, type="assoc_resp", status=status)
+            label = "assoc_resp" if subtype == cls.SUBTYPE_ASSOC_RESP else "reassoc_resp"
+            return AssocRespPacket(**base, type=label, status=status)
         if subtype == cls.SUBTYPE_AUTH:
             # Body: Algorithm(2) + Seq(2) + Status(2); status at offset 28.
             status = struct.unpack("<H", frame[28:30])[0] if len(frame) >= 30 else None
@@ -713,13 +720,10 @@ class WlanFrameParser:
 
             if tag_id == 0 and not seen_ssid: # SSID (only the first)
                 seen_ssid = True
-                if len(tag_data) == 0:
-                    parsed["ssid"] = "<hidden>"
-                elif len(tag_data) <= 32:
-                    # Validate against completely corrupted text
-                    if any(b < 0x20 and b not in (0x09, 0x0a, 0x0d) for b in tag_data):
-                        return None # Corrupt frame masquerading as valid
-                    parsed["ssid"] = tag_data.decode('utf-8', errors='ignore')
+                if len(tag_data) <= 32:
+                    parsed["ssid_bytes"] = tag_data
+                    if tag_data.strip(b"\x00"):
+                        parsed["ssid"] = ssid_text(tag_data)
             elif tag_id in (1, 50): # Supported Rates / Extended Supported Rates
                 capabilities.supported_rates_mbps.update(
                     (rate & 0x7F) * 0.5 for rate in tag_data

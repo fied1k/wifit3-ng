@@ -78,6 +78,7 @@ from wifit3.ui.network_metadata_panel import (
     client_network_details,
 )
 from wifit3.ui.recording_indicator import pcap_progress, recording_indicator
+from wifit3.ui.modals.nickname import NicknameModal
 from wifit3.ui.vault.global_tracker import GlobalJobTracker
 from wifit3.wlan.enterprise_risk import enterprise_findings, is_enterprise_ap
 from wifit3.wlan.network_metadata import PassiveNetworkAnalyzer
@@ -222,6 +223,7 @@ class FocusViewV2(Screen):
         Binding("c", "campaign('chop')", "ChopChop", show=True),
         Binding("i", "wps_info", "WPS Info", show=False),
         Binding("x", "capture_packets", "Capture PCAP", show=True),
+        Binding("n", "set_nickname", "Nickname", show=True),
         Binding("s", "silence", "Silence", show=True),
         Binding("s", "unsilence", "unSilence", show=True),
         Binding("v", "open_vault", "Vault", show=True),
@@ -491,7 +493,12 @@ class FocusViewV2(Screen):
                         ssid_note="",
                         identity="", identity_details=None)
         display_ssid, ssid_source = fm.display_ssid(ap, self.app.array)
+        if ssid_source == "live" and ap.ssid_displayable:
+            display_ssid = ap.ssid_displayable
         essid = fm.truncate_ssid(display_ssid) if display_ssid else "‹hidden›"
+        nickname = Config.nickname(ap.bssid)
+        if nickname:
+            essid = fm.truncate_ssid(f"{nickname} ({essid})")
         rate, _ = fm.beacon_rate(ap, self._beacon_samples, time.time())
         return dict(essid=essid, bssid=ap.bssid, channel=ap.channel,
                     channel_label=fm.channel_plain_summary(ap),
@@ -2211,6 +2218,12 @@ class FocusViewV2(Screen):
 
     def action_unsilence(self) -> None:
         self._toggle_silence()
+
+    def action_set_nickname(self) -> None:
+        if self._target_ap is None:
+            return
+        label = self._target_ap.ssid_displayable or self._target_ap.ssid
+        self.app.push_screen(NicknameModal(label, self._target_ap.bssid))
 
     def _toggle_silence(self) -> None:
         """Flip the focused AP's silenced state (campaigns off, handshakes/PMKIDs ignored)."""

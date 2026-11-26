@@ -49,17 +49,18 @@ class FakeApStats:
 
 
 class FakeAP:
-    def __init__(self, twin_iface, bssid: bytes, ssid: str, channel: int, twin_beacon: bytes,
+    def __init__(self, twin_iface, bssid: bytes, ssid: bytes | str, channel: int, twin_beacon: bytes,
                  rx_source=None, record_m1: Optional[Callable[[bytes], None]] = None):
         self.iface = twin_iface
         self.bssid = bssid
-        self.ssid = ssid
+        self.ssid_bytes = bytes(ssid) if isinstance(ssid, (bytes, bytearray)) else ssid.encode("utf-8", "ignore")
+        self.ssid = ssid.decode("utf-8", "ignore") if isinstance(ssid, (bytes, bytearray)) else ssid
         self.channel = channel
         self.twin_beacon = twin_beacon
         self.rx_source = rx_source
         self.record_m1 = record_m1 or (lambda _frame: None)
         self.stats = FakeApStats()
-        self._probe_resp = probe_resp(bssid, ssid, channel)
+        self._probe_resp = probe_resp(bssid, self.ssid_bytes, channel)
         self._running = False
         self._beacon_task: Optional[asyncio.Task] = None
 
@@ -117,8 +118,16 @@ class FakeAP:
             self._on_assoc(client)
 
     def _on_probe(self, pkt, client: bytes) -> None:
+        ssid_bytes = getattr(pkt, "ssid_bytes", None)
         ssid = getattr(pkt, "ssid", None)
-        if ssid in (None, "", "<hidden>"):
+        if ssid_bytes is not None:
+            if not ssid_bytes:
+                self.stats.probes_wildcard += 1
+            elif ssid_bytes == self.ssid_bytes:
+                self.stats.probes_direct += 1
+            else:
+                return
+        elif ssid in (None, "", "<hidden>"):
             self.stats.probes_wildcard += 1
         elif ssid == self.ssid:
             self.stats.probes_direct += 1

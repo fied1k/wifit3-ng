@@ -2,7 +2,10 @@
 4-way handshake (or PMKID) they assemble into.
 """
 from dataclasses import dataclass, field
-from typing import ClassVar, Optional, List, Set, Dict, Tuple
+from typing import TYPE_CHECKING, ClassVar, Optional, List, Set, Dict, Tuple
+
+if TYPE_CHECKING:
+    from wifit3.dot11.packet import EapolPacket
 
 
 @dataclass
@@ -30,6 +33,30 @@ class HandshakeMessage:
     mdid: bytes = b""
     r0khid: bytes = b""
     r1khid: bytes = b""
+
+    @classmethod
+    def from_packet(
+        cls,
+        packet: "EapolPacket",
+        akm: Optional[int],
+        timestamp: float,
+    ) -> "HandshakeMessage":
+        """``packet`` as a stored message; ``akm`` is the negotiated AKM (the frame's own RSN IE,
+        else the client's association). The caller checks ``packet.replay_counter`` is set."""
+        return cls(
+            raw=packet.raw,
+            msg_num=packet.msg_num,
+            replay_hex=packet.replay_counter.hex(),
+            nonce=packet.nonce or b"",
+            mic=packet.mic or b"",
+            key_data_len=packet.key_data_len,
+            eapol_payload=packet.payload,
+            timestamp=timestamp,
+            akm=akm,
+            mdid=packet.mdid,
+            r0khid=packet.r0khid,
+            r1khid=packet.r1khid,
+        )
 
 
 @dataclass
